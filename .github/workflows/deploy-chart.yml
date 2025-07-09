@@ -1,0 +1,79 @@
+name: 'Helm Deployment'
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'helm/**'
+  pull_request:
+    paths:
+      - 'helm/**'
+
+permissions:
+  contents: read
+  id-token: write # Required for OIDC authentication
+
+jobs:
+  deploy:
+    name: 'Deploy Helm Chart'
+    runs-on: ubuntu-latest
+    environment: development
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: helm
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        aws-region: ${{ secrets.AWS_REGION }}
+        role-session-name: GitHubActions-Helm
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Setup Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: 'latest'
+
+    #Connect to the cluster. Upate kube config
+    - name: Configure kubectl for EKS
+      run: |
+        aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+    - name: Verify cluster connection
+      run: |
+        kubectl get nodes
+
+
+    - name: Helm Lint
+      run: |
+        helm lint .
+
+    - name: Helm Template (Dry Run)
+      run: |
+        helm template ${{ secrets.HELM_RELEASE_NAME }} . \
+          --namespace default \
+          --create-namespace
+
+    #Deploys only when merged to main branch
+    - name: Helm Deploy
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        helm upgrade --install ${{ secrets.HELM_RELEASE_NAME }} . \
+          --namespace default
+
+    - name: Verify Deployment
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        kubectl get pods
+        kubectl get services
